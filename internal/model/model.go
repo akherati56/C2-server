@@ -16,7 +16,10 @@ type Agent struct {
 }
 
 type Task struct {
-	Command string `json:"command"`
+	ID        string `json:"id,omitempty"`
+	Type      string `json:"type"`
+	Command   string `json:"command,omitempty"`
+	PayloadID string `json:"payload_id,omitempty"`
 }
 
 type Result struct {

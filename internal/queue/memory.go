@@ -1,38 +1,49 @@
 package queue
 
-import "sync"
+import (
+	"sync"
+
+	"c2server/internal/model"
+)
 
 type Memory struct {
-	mu sync.Mutex
-	q  map[string][]string
+	mu      sync.Mutex
+	pending map[string][]model.Task
 }
 
 func NewMemory() *Memory {
-	return &Memory{q: make(map[string][]string)}
+	return &Memory{
+		pending: make(map[string][]model.Task),
+	}
 }
 
-func (m *Memory) Enqueue(agentID, command string) error {
+func (m *Memory) Enqueue(agentID string, task model.Task) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.q[agentID] = append(m.q[agentID], command)
+
+	m.pending[agentID] =
+		append(m.pending[agentID], task)
+
 	return nil
 }
 
-func (m *Memory) Dequeue(agentID string) (string, bool) {
+func (m *Memory) Dequeue(agentID string) (model.Task, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cmds, ok := m.q[agentID]
-	if !ok || len(cmds) == 0 {
-		return "", false
+	tasks := m.pending[agentID]
+
+	if len(tasks) == 0 {
+		return model.Task{}, false
 	}
 
-	cmd := cmds[0]
-	cmds = cmds[1:]
-	if len(cmds) == 0 {
-		delete(m.q, agentID)
+	task := tasks[0]
+
+	if len(tasks) == 1 {
+		delete(m.pending, agentID)
 	} else {
-		m.q[agentID] = cmds
+		m.pending[agentID] = tasks[1:]
 	}
-	return cmd, true
+
+	return task, true
 }

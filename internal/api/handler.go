@@ -64,22 +64,40 @@ func (h *Handler) task(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown agent")
 		return
 	}
+
 	_ = h.store.Touch(id)
 
-	cmd, ok := h.queue.Dequeue(id)
+	task, ok := h.queue.Dequeue(id)
+
 	if !ok {
-		writeJSON(w, http.StatusOK, model.Task{Command: ""})
+		writeJSON(w, http.StatusOK, model.Task{
+			Type: "none",
+		})
 		return
 	}
 
-	// ثبت سابقه با خروجی خالی (وضعیت «در حال اجرا»)
-	entryID, _ := h.history.Begin(id, cmd)
+	// برای history فعلاً command را ثبت می‌کنیم.
+	historyValue := task.Command
+
+	if task.Type == "payload" {
+		historyValue = "payload:" + task.PayloadID
+	}
+
+	entryID, _ := h.history.Begin(id, historyValue)
+
 	h.mu.Lock()
 	h.pending[id] = entryID
 	h.mu.Unlock()
 
-	h.logger.Info("task dispatched", "id", id, "command", cmd)
-	writeJSON(w, http.StatusOK, model.Task{Command: cmd})
+	h.logger.Info(
+		"task dispatched",
+		"id", id,
+		"type", task.Type,
+		"command", task.Command,
+		"payload_id", task.PayloadID,
+	)
+
+	writeJSON(w, http.StatusOK, task)
 }
 
 // POST /result?id=...
@@ -112,27 +130,86 @@ func (h *Handler) result(w http.ResponseWriter, r *http.Request) {
 // POST /queue?id=...
 func (h *Handler) queueCmd(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing id")
 		return
 	}
 
-	var task model.Task
-	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
-		return
-	}
-	if task.Command == "" {
-		writeError(w, http.StatusBadRequest, "empty command")
+	if _, err := h.store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, "unknown agent")
 		return
 	}
 
-	if err := h.queue.Enqueue(id, task.Command); err != nil {
-		h.logger.Error("enqueue failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "enqueue failed")
+	var task model.Task
+
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid body: "+err.Error(),
+		)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+
+	switch task.Type {
+
+	case "shell":
+		if task.Command == "" {
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"shell task requires command",
+			)
+			return
+		}
+
+		task.PayloadID = ""
+
+	case "payload":
+		if task.PayloadID == "" {
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"payload task requires payload_id",
+			)
+			return
+		}
+
+		task.Command = ""
+
+	default:
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"unsupported task type",
+		)
+		return
+	}
+
+	if err := h.queue.Enqueue(id, task); err != nil {
+		h.logger.Error(
+			"enqueue failed",
+			"error", err,
+		)
+
+		writeError(
+			w,
+			http.StatusInternalServerError,
+			"enqueue failed",
+		)
+
+		return
+	}
+
+	writeJSON(
+		w,
+		http.StatusOK,
+		map[string]string{
+			"status": "queued",
+			"type":   task.Type,
+		},
+	)
 }
 
 // GET /agents
